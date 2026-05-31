@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>信貸 × 質押 循環套利動態防禦模型 (修正版)</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background-color: #f8f9fa;
+            color: #333;
+            margin: 0;
+            padding: 20px;
+        }
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: #fff;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+        }
+        h1 {
+            color: #2c3e50;
+            font-size: 24px;
+            margin-bottom: 10px;
+            border-bottom: 2px solid #3498db;
+            padding-bottom: 10px;
+        }
+        .notice {
+            background-color: #e8f4fd;
+            border-left: 4px solid #3498db;
+            padding: 12px;
+            margin-bottom: 20px;
+            font-size: 14px;
+        }
+        .input-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            background: #f1f2f6;
+            padding: 15px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+        }
+        .input-group {
+            display: flex;
+            flex-direction: column;
+        }
+        .input-group label {
+            font-size: 13px;
+            font-weight: bold;
+            margin-bottom: 5px;
+            color: #555;
+        }
+        .input-group input {
+            padding: 8px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            font-size: 15px;
+        }
+        .summary-box {
+            background: #fff3cd;
+            border: 1px solid #ffeeba;
+            padding: 15px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+            font-size: 15px;
+            line-height: 1.6;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 10px;
+            font-size: 13px;
+            text-align: center;
+        }
+        th {
+            background-color: #2c3e50;
+            color: white;
+            padding: 10px 5px;
+            font-weight: 600;
+        }
+        td {
+            padding: 10px 5px;
+            border-bottom: 1px solid #ddd;
+        }
+        tr:hover {
+            background-color: #f1f2f6;
+        }
+        input.table-input {
+            width: 60px;
+            padding: 4px;
+            text-align: center;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+        }
+        input.input-add {
+            border: 1px solid #2ecc71;
+            background-color: #fafffa;
+        }
+        .text-danger {
+            color: #e74c3c;
+            font-weight: bold;
+        }
+        .text-success {
+            color: #2ecc71;
+            font-weight: bold;
+        }
+        .guide-box {
+            margin-top: 30px;
+            background: #f9f9f9;
+            padding: 20px;
+            border-radius: 6px;
+            border: 1px solid #e0e0e0;
+        }
+        .guide-box h2 {
+            font-size: 18px;
+            margin-top: 0;
+        }
+        .guide-box ul {
+            padding-left: 20px;
+            line-height: 1.8;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>信貸 × 質押 循環套利動態防禦模型 (修正版)</h1>
+    <div class="notice">
+        已修正大跌加碼邏輯：手動加碼之資金將於「大跌盤後」或「隔年年初」精準切入，不計入當年大跌跌幅。
+    </div>
+
+    <div class="input-grid">
+        <div class="input-group">
+            <label>初始信貸額度 (萬元)</label>
+            <input type="number" id="initLoan" value="220" oninput="calculateModel()">
+        </div>
+        <div class="input-group">
+            <label>信貸利率 (%)</label>
+            <input type="number" id="loanRate" value="2.6" step="0.1" oninput="calculateModel()">
+        </div>
+        <div class="input-group">
+            <label>信貸還款年限 (年)</label>
+            <input type="number" id="loanYears" value="10" oninput="calculateModel()">
+        </div>
+        <div class="input-group">
+            <label>質押利率 (%)</label>
+            <input type="number" id="pledgeRate" value="2.5" step="0.1" oninput="calculateModel()">
+        </div>
+    </div>
+
+    <div class="summary-box" id="summaryText">
+        載入中...
+    </div>
+
+    <table id="modelTable">
+        <thead>
+            <tr>
+                <th>年度</th>
+                <th>當年報酬率</th>
+                <th>股票資產市值</th>
+                <th>信貸餘額<br>(永遠重置)</th>
+                <th>重置拿回本金<br>(還質押)</th>
+                <th>信貸純利息<br>(轉質押)</th>
+                <th>質押當期利息</th>
+                <th>質押累積負債</th>
+                <th>當期維持率</th>
+                <th>斷頭臨界市值<br>(130%線)</th>
+                <th>安全邊際<br>(跌幅空間)</th>
+                <th>600%防線下<br>最大可加碼額度</th>
+                <th>手動再投入加碼<br>(自選萬元)</th>
+                <th>純資產淨值</th>
+            </tr>
+        </thead>
+        <tbody id="tableBody">
+            </tbody>
+    </table>
+
+    <div class="guide-box">
+        <h2>💡 模型操作與防禦指南：</h2>
+        <ul>
+            <li><strong>模擬大跌與正2績效：</strong> 您可以自由修改任何一年的「當年報酬率」。目前已預設帶入您提供的正2歷史10年真實績效（含第7年 -48% 的極端市況）。</li>
+            <li><strong>修正後的加碼機制（綠色欄位）：</strong> 當你在大跌年（如第7年 -48%）輸入加碼金額時，公式會判定這筆錢是 <em>在大跌後的歷史低點才買進</em> 。因此，這筆加碼本金在當年度不會縮水，並會在隔年（第8年）年初完整參與 +69.3% 的暴擊反彈！</li>
+            <li><strong>600% 防線最大可加碼額度：</strong> 代表在維持 600% 機構安全線的前提下，您當前資產還能向銀行質押借出多少錢。若低於此額度或為0，建議使用信貸重置退回的本金或外部閒錢現股加碼。</li>
+        </ul>
+    </div>
+</div>
+
+<script>
+// 預設10年的報酬率與手動加碼歷史數據
+const defaultData = [
+    { year: 1, rate: 39, add: 36 },
+    { year: 2, rate: 39, add: 0 },
+    { year: 3, rate: -17, add: 20 },
+    { year: 4, rate: 70, add: 0 },
+    { year: 5, rate: 53.6, add: 0 },
+    { year: 6, rate: 57.8, add: 0 },
+    { year: 7, rate: -48, add: 40 },
+    { year: 8, rate: 69.3, add: 0 },
+    { year: 9, rate: 65.4, add: 0 },
+    { year: 10, rate: 51.2, add: 0 }
+];
+
+// PMT 函數：計算每月還款額 (本息平均攤還)
+function PMT(ratePerMonth, numberOfMonths, principal) {
+    return (principal * ratePerMonth * Math.pow(1 + ratePerMonth, numberOfMonths)) / (Math.pow(1 + ratePerMonth, numberOfMonths) - 1);
+}
+
+function calculateModel() {
+    // 讀取輸入值
+    const initLoan = parseFloat(document.getElementById('initLoan').value) || 0;
+    const loanRate = (parseFloat(document.getElementById('loanRate').value) || 0) / 100;
+    const loanYears = parseInt(document.getElementById('loanYears').value) || 10;
+    const pledgeRate = (parseFloat(document.getElementById('pledgeRate').value) || 0) / 100;
+
+    // 計算信貸每月與每年結構
+    const monthlyRate = loanRate / 12;
+    const totalMonths = loanYears * 12;
+    const monthlyPayment = PMT(monthlyRate, totalMonths, initLoan * 10000);
+    const yearlyPaymentTotal = (monthlyPayment * 12) / 10000; // 萬元
+
+    // 估算第一年還款結構
+    let tempBalance = initLoan * 10000;
+    let firstYearInterest = 0;
+    for(let i=0; i<12; i++) {
+        let interest = tempBalance * monthlyRate;
+        let principal = monthlyPayment - interest;
+        firstYearInterest += interest;
+        tempBalance -= principal;
+    }
+    const firstYearInterestWan = firstYearInterest / 10000;
+    const firstYearPrincipalWan = yearlyPaymentTotal - firstYearInterestWan;
+
+    // 更新摘要文字
+    document.getElementById('summaryText').innerHTML = `
+        信貸每月還款額：<strong>${Math.round(monthlyPayment).toLocaleString()} 元</strong> 
+        (一年共需自質押帳戶提領 <strong>${yearlyPaymentTotal.toFixed(2)} 萬</strong> 現金去還信貸本息)<br>
+        每年信貸還款結構：還本金約 <strong>${firstYearPrincipalWan.toFixed(2)} 萬元</strong> ，純利息約 <strong>${firstYearInterestWan.toFixed(2)} 萬元</strong>。
+    `;
+
+    // 獲取目前表格中用戶最新數據
+    const tbody = document.getElementById('tableBody');
+    let currentInputs = [];
+    if (tbody && tbody.children.length > 0) {
+        for(let i=1; i<=10; i++) {
+            const rateInput = document.getElementById(`rate_${i}`);
+            const addInput = document.getElementById(`add_${i}`);
+            currentInputs.push({
+                rate: rateInput ? parseFloat(rateInput.value) : defaultData[i-1].rate,
+                add: addInput ? parseFloat(addInput.value) : defaultData[i-1].add
+            });
+        }
+    } else {
+        currentInputs = defaultData.map(d => ({ rate: d.rate, add: d.add }));
+    }
+
+    // 清空並重新渲染表格
+    tbody.innerHTML = '';
+
+    // 年度 0 的初始狀態
+    let marketValue = initLoan; 
+    let debt = 0; 
+
+    let html = `
+        <tr>
+            <td><strong>0</strong></td>
+            <td>-</td>
+            <td>${marketValue.toFixed(1)} 萬</td>
+            <td>${initLoan.toFixed(1)} 萬</td>
+            <td>-</td>
+            <td>-</td>
+            <td>-</td>
+            <td>0.0 萬</td>
+            <td>-</td>
+            <td>-</td>
+            <td>-</td>
+            <td>${Math.max(0, (marketValue / 6 - debt)).toFixed(1)} 萬</td>
+            <td>-</td>
+            <td><span class="text-success">0.0 萬</span></td>
+        </tr>
+    `;
+
+    // 遞迴計算 1~10 年
+    for (let i = 1; i <= 10; i++) {
+        const rowData = currentInputs[i-1];
+        const rate = rowData.rate / 100;
+        const manualAdd = rowData.add;
+
+        // 1. 市場報酬變動
+        let marketValueBeforeAdd = marketValue * (1 + rate);
+
+        // 2. 質押利息 (若去年負債小於0，則利息以0計，不賺取銀行利息)
+        let calcDebtForInterest = debt > 0 ? debt : 0;
+        let currentPledgeInterest = calcDebtForInterest * pledgeRate;
+
+        // 3. 現金流出
+        let cashDrain = firstYearInterestWan; 
+
+        // 4. 計算新負債
+        debt = debt + currentPledgeInterest + cashDrain + manualAdd;
+
+        // 5. 市值精準切入
+        marketValue = marketValueBeforeAdd + manualAdd;
+
+        // 6. 指標安全化修正
+        let maintenanceRateStr = '-';
+        let isLowMaintenance = false;
+        let marginCallValue = 0;
+        let safetyMargin = 0;
+
+        if (debt > 0) {
+            // 真正有欠債時計算精確數值
+            let mRate = (marketValue / debt) * 100;
+            maintenanceRateStr = Math.round(mRate) + '%';
+            if (mRate < 140) isLowMaintenance = true;
+            
+            marginCallValue = debt * 1.3;
+            if (marketValue > 0) {
+                safetyMargin = ((marketValue - marginCallValue) / marketValue) * 100;
+            }
+        } else {
+            // 負債小於等於0（代表倒賺現金），維持率是無限安全
+            maintenanceRateStr = '∞ (無負債)';
+            marginCallValue = 0;
+            safetyMargin = 100; // 沒債務代表能承受100%下跌
+        }
+
+        // 600% 防線下最大可加碼額度
+        let maxAdd600 = (marketValue / 6) - debt;
+        if (maxAdd600 < 0) maxAdd600 = 0;
+
+        // 純資產淨值
+        let netWorth = marketValue - initLoan - debt;
+
+        // 樣式標記
+        let debtClass = debt > 0 ? 'class="text-danger"' : 'class="text-success"';
+        let maintenanceClass = isLowMaintenance ? 'class="text-danger"' : 'class="text-success"';
+
+        html += `
+            <tr>
+                <td><strong>${i}</strong></td>
+                <td><input type="number" id="rate_${i}" class="table-input" value="${rowData.rate}" oninput="calculateModel()"> %</td>
+                <td>${marketValue.toFixed(1)} 萬</td>
+                <td>${initLoan.toFixed(1)} 萬</td>
+                <td>${firstYearPrincipalWan.toFixed(1)} 萬</td>
+                <td>${firstYearInterestWan.toFixed(1)} 萬</td>
+                <td>${currentPledgeInterest.toFixed(1)} 萬</td>
+                <td ${debtClass}>${debt.toFixed(1)} 萬</td>
+                <td ${maintenanceClass}>${maintenanceRateStr}</td>
+                <td>${marginCallValue > 0 ? marginCallValue.toFixed(1) + ' 萬' : '-'}</td>
+                <td>${safetyMargin >= 100 ? '100%' : safetyMargin.toFixed(1) + '%'}</td>
+                <td>${maxAdd600.toFixed(1)} 萬</td>
+                <td><input type="number" id="add_${i}" class="table-input input-add" value="${manualAdd}" oninput="calculateModel()"></td>
+                <td><strong class="text-success">${netWorth.toFixed(1)} 萬</strong></td>
+            </tr>
+        `;
+    }
+
+    if(tbody) tbody.innerHTML = html;
+}
+
+// 網頁載入時自動執行第一次計算
+window.onload = calculateModel;
+</script>
+
+</body>
+</html>
